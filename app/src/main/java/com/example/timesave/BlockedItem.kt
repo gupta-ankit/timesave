@@ -1,5 +1,8 @@
 package com.example.timesave
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class BlockedItem(
     val identifier: String, // Can be a hostname (e.g., "youtube.com") or a package name (e.g., "com.google.android.youtube")
     val type: BlockType,
