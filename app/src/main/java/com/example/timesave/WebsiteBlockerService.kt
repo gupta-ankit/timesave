@@ -3,6 +3,8 @@ package com.example.timesave
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -11,6 +13,10 @@ import android.view.accessibility.AccessibilityNodeInfo
 class WebsiteBlockerService : AccessibilityService() {
 
     private val TAG = "WebsiteBlockerService"
+    private val CHECK_INTERVAL_MS = 30 * 1000L // 30 seconds
+
+    private val handler = Handler(Looper.getMainLooper())
+    private lateinit var usageCheckRunnable: Runnable
 
     // TODO: Load this list from storage
     private val blockedItems = listOf(
@@ -113,7 +119,7 @@ class WebsiteBlockerService : AccessibilityService() {
         sessionStartTimeMillis = SystemClock.elapsedRealtime()
     }
 
-    private fun finalizeSession(identifier: String?) {
+    private fun finalizeSession(identifier: String?, preemptiveBlock: Boolean = false) {
         if (identifier == null || sessionStartTimeMillis == null) {
             // Log.d(TAG, "FinalizeSession called with no active session for $identifier")
             clearCurrentSession()
@@ -136,7 +142,11 @@ class WebsiteBlockerService : AccessibilityService() {
         Log.i(TAG, "Finalized session for ${itemConfig?.displayName ?: identifier}. Duration: ${sessionDurationMillis / 1000}s. Total today: ${newTotalUsage / 1000}s")
         clearCurrentSession()
 
-        checkUsageLimits(identifier, newTotalUsage)
+        checkUsageLimitsAndBlockIfNeeded(identifier, newTotalUsage, false)
+
+        if (preemptiveBlock && itemConfig != null) {
+            showBlockScreen(itemConfig)
+        }
     }
     
     private fun clearCurrentSession() {
@@ -146,12 +156,14 @@ class WebsiteBlockerService : AccessibilityService() {
         // Log.d(TAG, "Current session cleared.")
     }
 
-    private fun checkUsageLimits(identifier: String, totalUsageMillis: Long) {
+    private fun checkUsageLimitsAndBlockIfNeeded(identifier: String, totalUsageMillis: Long, isPeriodicCheck: Boolean) {
         val itemConfig = blockedItems.find { it.identifier == identifier }
         if (itemConfig != null) {
             val limitMillis = itemConfig.timeLimitInMinutes * 60 * 1000
-            if (limitMillis > 0 && totalUsageMillis >= limitMillis) { // Only block if limit > 0
-                Log.w(TAG, "Time limit EXCEEDED for ${itemConfig.displayName ?: identifier}! Usage: ${totalUsageMillis / 1000}s, Limit: ${limitMillis / 1000}s")
+            if (limitMillis > 0 && totalUsageMillis >= limitMillis) {
+                if (!isPeriodicCheck) {
+                    Log.w(TAG, "Normal Check: Time limit EXCEEDED for ${itemConfig.displayName ?: identifier}! Usage: ${totalUsageMillis / 1000}s, Limit: ${limitMillis / 1000}s")
+                }
                 showBlockScreen(itemConfig)
             } else {
                  Log.i(TAG, "Time limit NOT YET exceeded for ${itemConfig.displayName ?: identifier}. Usage: ${totalUsageMillis / 1000}s, Limit: ${limitMillis / 1000}s")
@@ -162,18 +174,33 @@ class WebsiteBlockerService : AccessibilityService() {
     private fun showBlockScreen(item: BlockedItem) {
         val intent = Intent(this, BlockActivity::class.java)
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP) // Clears other instances of BlockActivity if any
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
         intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         intent.putExtra(BlockActivity.EXTRA_BLOCKED_ITEM_NAME, item.displayName ?: item.identifier)
         intent.putExtra(BlockActivity.EXTRA_BLOCKED_ITEM_IDENTIFIER, item.identifier)
+        
         try {
-            startActivity(intent)
+            startActivity(intent) // Show the blocking message first
             Log.i(TAG, "BlockActivity launched for ${item.displayName ?: item.identifier}")
+
+            // After a short delay, or even immediately, attempt to go to the home screen
+            // This effectively "closes" the app that was being used.
+            // Using a Handler to post a delayed action can make it smoother,
+            // but for simplicity, we can try it directly or with a small Thread.sleep (not ideal in service normally).
+            // For immediate action:
+            val homeActionSuccess = performGlobalAction(GLOBAL_ACTION_HOME)
+            Log.i(TAG, "Attempted GLOBAL_ACTION_HOME for ${item.displayName ?: item.identifier}. Success: $homeActionSuccess")
+            if (!homeActionSuccess) {
+                Log.w(TAG, "GLOBAL_ACTION_HOME failed. The app might still be in the foreground under BlockActivity.")
+                // As a more forceful alternative, though less common from Acc. service for this purpose:
+                // performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) // try multiple times if needed
+            }
+
         } catch (e: Exception) {
-            Log.e(TAG, "Error launching BlockActivity: ", e)
-            // Fallback or error handling if activity cannot be started from service
-            // This might happen due to background activity start restrictions on newer Android versions
-            // Consider posting a high-priority notification instead as a fallback.
+            Log.e(TAG, "Error launching BlockActivity or performing home action: ", e)
+            // Fallback: If BlockActivity fails, at least try to go home
+            val homeActionSuccess = performGlobalAction(GLOBAL_ACTION_HOME)
+            Log.i(TAG, "Fallback: Attempted GLOBAL_ACTION_HOME for ${item.displayName ?: item.identifier}. Success: $homeActionSuccess")
         }
     }
 
@@ -258,12 +285,6 @@ class WebsiteBlockerService : AccessibilityService() {
         return null
     }
 
-
-    override fun onInterrupt() {
-        Log.w(TAG, "onInterrupt: Service interrupted. Finalizing any active session.")
-        finalizeSession(currentlyTrackedIdentifier)
-    }
-
     override fun onServiceConnected() {
         super.onServiceConnected()
         val currentServiceInfo = this.serviceInfo ?: AccessibilityServiceInfo()
@@ -276,10 +297,52 @@ class WebsiteBlockerService : AccessibilityService() {
         Log.i(TAG, "onServiceConnected: WebsiteBlockerService connected.")
         itemUsageTodayMillis.clear()
         Log.d(TAG, "Item usage data cleared on service connect.")
+
+        setupPeriodicCheck()
+        handler.post(usageCheckRunnable) // Start the periodic check
+    }
+
+    private fun setupPeriodicCheck() {
+        usageCheckRunnable = Runnable {
+            checkCurrentItemUsageLimit()
+            handler.postDelayed(usageCheckRunnable, CHECK_INTERVAL_MS)
+        }
+    }
+
+    private fun checkCurrentItemUsageLimit() {
+        val trackedId = currentlyTrackedIdentifier
+        val sessionStart = sessionStartTimeMillis
+
+        if (trackedId != null && sessionStart != null) {
+            val itemConfig = blockedItems.find { it.identifier == trackedId }
+            if (itemConfig != null && itemConfig.timeLimitInMinutes > 0) {
+                val currentTimeMillis = SystemClock.elapsedRealtime()
+                val currentSessionDurationMillis = currentTimeMillis - sessionStart
+                val recordedUsageMillis = itemUsageTodayMillis.getOrDefault(trackedId, 0L)
+                val hypotheticalTotalUsageMillis = recordedUsageMillis + currentSessionDurationMillis
+                val limitMillis = itemConfig.timeLimitInMinutes * 60 * 1000
+
+                // Log.d(TAG, "Periodic Check for ${itemConfig.displayName ?: trackedId}: CurrentSessionDur=${currentSessionDurationMillis/1000}s, RecordedUsage=${recordedUsageMillis/1000}s, HypTotal=${hypotheticalTotalUsageMillis/1000}s, Limit=${limitMillis/1000}s")
+
+                if (hypotheticalTotalUsageMillis >= limitMillis) {
+                    Log.w(TAG, "Periodic Check: Time limit EXCEEDED for ${itemConfig.displayName ?: trackedId}! Usage: ${hypotheticalTotalUsageMillis / 1000}s, Limit: ${limitMillis / 1000}s")
+                    // Finalize the session *before* showing the block screen to record the time accurately
+                    finalizeSession(trackedId, true) // Pass a flag to indicate it's a preemptive block
+                    // showBlockScreen is now called inside finalizeSession if conditions met from periodic check
+                }
+            }
+        }
+    }
+
+    override fun onInterrupt() {
+        Log.w(TAG, "onInterrupt: Service interrupted. Finalizing any active session.")
+        handler.removeCallbacks(usageCheckRunnable) // Stop periodic check
+        finalizeSession(currentlyTrackedIdentifier)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         Log.i(TAG, "onUnbind: WebsiteBlockerService unbound. Finalizing any active session.")
+        handler.removeCallbacks(usageCheckRunnable) // Stop periodic check
         finalizeSession(currentlyTrackedIdentifier)
         return super.onUnbind(intent)
     }
