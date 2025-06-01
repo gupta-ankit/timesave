@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Required for listing all apps for the app picker on Android 11+ -->
+    <!-- You'll need to declare usage of this permission if publishing on Google Play -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -29,6 +34,27 @@
             android:theme="@style/Theme.Timesave.Transparent"
             android:taskAffinity="">
             <!-- taskAffinity="" and launchMode="singleTask" help ensure it doesn't just get grouped with the blocked app's task stack -->
+        </activity>
+
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false" 
+            android:label="Settings">
+            <!-- android:parentActivityName=".MainActivity" >
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".MainActivity" /> -->
+        </activity>
+
+        <activity
+            android:name=".AppPickerActivity"
+            android:exported="false"
+            android:label="Select App">
+            <!-- android:parentActivityName=".SettingsActivity" >
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".SettingsActivity" />
+            </meta-data> -->
         </activity>
 
         <service
