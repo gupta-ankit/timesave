@@ -25,45 +25,34 @@
             android:id="@+id/textViewItemName"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            tools:text="YouTube App" />
+            android:textAppearance="@style/TextAppearance.AppCompat.Medium"
+            tools:text="Item Name" />
 
         <TextView
             android:id="@+id/textViewItemIdentifier"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="12sp"
-            tools:text="com.google.android.youtube" />
+            android:textAppearance="@style/TextAppearance.AppCompat.Small"
+            tools:text="com.example.app" />
 
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/textViewTimeLimit"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:textSize="14sp"
-        android:layout_marginEnd="10dp"
-        tools:text="60 min" />
-
     <ImageButton
         android:id="@+id/buttonEditLimit"
-        android:layout_width="40dp"
-        android:layout_height="40dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:background="?attr/selectableItemBackgroundBorderless"
-        android:contentDescription="Edit time limit"
-        app:srcCompat="@android:drawable/ic_menu_edit" 
-        app:tintMode="src_in"
-        app:tint="@color/purple_500"/>
-        
+        android:contentDescription="Edit Item"
+        android:padding="8dp"
+        app:srcCompat="@drawable/ic_edit" />
+
     <ImageButton
         android:id="@+id/buttonDeleteItem"
-        android:layout_width="40dp"
-        android:layout_height="40dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:background="?attr/selectableItemBackgroundBorderless"
-        android:contentDescription="Delete item"
-        app:srcCompat="@android:drawable/ic_menu_delete" 
-        app:tintMode="src_in"
-        app:tint="@android:color/holo_red_dark"/>
+        android:contentDescription="Delete Item"
+        android:padding="8dp"
+        app:srcCompat="@drawable/ic_delete" />
 
 </LinearLayout> 

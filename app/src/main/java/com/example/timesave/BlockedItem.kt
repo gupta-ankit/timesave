@@ -4,8 +4,13 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class BlockedItem(
-    val identifier: String, // Can be a hostname (e.g., "youtube.com") or a package name (e.g., "com.google.android.youtube")
+    val identifier: String, // hostname for website, package name for app
     val type: BlockType,
-    val timeLimitInMinutes: Long,
-    val displayName: String? = null // Optional: for a user-friendly name if identifier is a package name
-) 
+    var timeLimitInMinutes: Long, // Placeholder if using group limits, actual limit if per-item (not used for now)
+    var displayName: String? = null,
+    val groupId: String = "default_group" // All items belong to a group
+) {
+    // Optional: secondary constructor if you often create items without specifying groupId initially
+    // constructor(identifier: String, type: BlockType, timeLimitInMinutes: Long, displayName: String? = null)
+    // : this(identifier, type, timeLimitInMinutes, displayName, "default_group")
+} 

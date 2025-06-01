@@ -33,20 +33,7 @@ class BlockedItemAdapter(
             BlockType.WEBSITE -> "Site: ${item.identifier}"
         }
         
-        if (item.timeLimitInMinutes == 0L) {
-            holder.timeLimit.text = "Blocked"
-        } else {
-            val hours = item.timeLimitInMinutes / 60
-            val minutes = item.timeLimitInMinutes % 60
-            var timeString = ""
-            if (hours > 0) {
-                timeString += "${hours}h "
-            }
-            if (minutes > 0 || hours.toInt() == 0) { // Show minutes if they exist, or if hours is 0 (e.g. "0h 30min" or just "30min")
-                timeString += "${minutes}m"
-            }
-            holder.timeLimit.text = timeString.trim()
-        }
+        // Time limit text is removed, no longer setting holder.timeLimit.text
 
         // Load app icon if it's an app
         if (item.type == BlockType.APP) {
@@ -76,6 +63,8 @@ class BlockedItemAdapter(
         notifyDataSetChanged() // Consider using DiffUtil for better performance later
     }
     
+    // Removed removeItem method as the Activity now handles list modification and notification
+
     fun updateItem(position: Int, item: BlockedItem) {
         if (position >= 0 && position < items.size) {
             items[position] = item
@@ -87,7 +76,7 @@ class BlockedItemAdapter(
         val itemIcon: ImageView = view.findViewById(R.id.imageViewItemIcon)
         val itemName: TextView = view.findViewById(R.id.textViewItemName)
         val itemIdentifier: TextView = view.findViewById(R.id.textViewItemIdentifier)
-        val timeLimit: TextView = view.findViewById(R.id.textViewTimeLimit)
+        // Removed: val timeLimit: TextView = view.findViewById(R.id.textViewTimeLimit)
         val editButton: ImageButton = view.findViewById(R.id.buttonEditLimit)
         val deleteButton: ImageButton = view.findViewById(R.id.buttonDeleteItem)
     }
