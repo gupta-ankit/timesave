@@ -22,6 +22,15 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".BlockActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Timesave.Transparent"
+            android:taskAffinity="">
+            <!-- taskAffinity="" and launchMode="singleTask" help ensure it doesn't just get grouped with the blocked app's task stack -->
+        </activity>
+
         <service
             android:name=".WebsiteBlockerService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"

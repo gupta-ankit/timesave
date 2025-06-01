@@ -13,4 +13,16 @@
         <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
         <!-- Customize your theme here. -->
     </style>
+
+    <style name="Theme.Timesave.Transparent" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">false</item> <!-- Make it full screen -->
+        <item name="android:backgroundDimEnabled">true</item> <!-- Dim the background -->
+        <item name="android:backgroundDimAmount">0.7</item> <!-- Dim amount -->
+        <item name="android:statusBarColor">@android:color/transparent</item> <!-- Optional: make status bar transparent -->
+    </style>
+
 </resources>

@@ -13,38 +13,43 @@ class WebsiteBlockerService : AccessibilityService() {
     private val TAG = "WebsiteBlockerService"
 
     // TODO: Load this list from storage
-    private val distractingWebsites = listOf(
-        DistractingWebsite("youtube.com", 1), // 1 minute for testing
-        DistractingWebsite("facebook.com", 1),
-        DistractingWebsite("instagram.com", 1),
-        DistractingWebsite("twitter.com", 1),
-        DistractingWebsite("reddit.com", 1)
+    private val blockedItems = listOf(
+        BlockedItem("youtube.com", BlockType.WEBSITE, 1, "YouTube Website"),
+        BlockedItem("com.google.android.youtube", BlockType.APP, 1, "YouTube App"),
+        BlockedItem("facebook.com", BlockType.WEBSITE, 1, "Facebook Website"),
+        BlockedItem("com.facebook.katana", BlockType.APP, 1, "Facebook App"), // Example package name
+        BlockedItem("instagram.com", BlockType.WEBSITE, 1, "Instagram Website"),
+        BlockedItem("com.instagram.android", BlockType.APP, 1, "Instagram App"), // Example package name
+        BlockedItem("twitter.com", BlockType.WEBSITE, 1, "Twitter/X Website"),
+        BlockedItem("com.twitter.android", BlockType.APP, 1, "Twitter/X App"), // Example package name
+        BlockedItem("reddit.com", BlockType.WEBSITE, 1, "Reddit Website")
+        // Add com.reddit.frontpage for the app if needed
     )
 
-    // TODO: Store and update daily usage, and persist this
-    private val websiteUsageTodayMillis = mutableMapOf<String, Long>() // Hostname to milliseconds
+    // Stores usage in milliseconds, keyed by item identifier (hostname or package name)
+    // TODO: Persist this data
+    private val itemUsageTodayMillis = mutableMapOf<String, Long>()
 
-    private var currentlyTrackedHostname: String? = null
+    private var currentlyTrackedIdentifier: String? = null
+    private var currentItemType: BlockType? = null
     private var sessionStartTimeMillis: Long? = null
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        Log.d(TAG, "onAccessibilityEvent: type -> ${AccessibilityEvent.eventTypeToString(event?.eventType ?: -1)}")
+        // Log.d(TAG, "onAccessibilityEvent: type -> ${AccessibilityEvent.eventTypeToString(event?.eventType ?: -1)}, package -> ${event?.packageName}")
 
-        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || event?.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || 
+            event?.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            
             val packageName = event.packageName?.toString()
-            Log.d(TAG, "Foreground App: $packageName, Event Source Package: ${event.source?.packageName}")
+            // Log.d(TAG, "Foreground App: $packageName, Event Source Node: ${event.source?.className}")
 
             val rootInActiveWindow: AccessibilityNodeInfo? = rootInActiveWindow
             var currentUrl: String? = null
 
-            if (rootInActiveWindow != null && packageName != null) {
-                // Only try to get URL if it's a known browser or a WebView container
-                // Add more browser package names as needed
-                if (isBrowserApp(packageName)) {
+            if (packageName != null) {
+                if (isBrowserApp(packageName) && rootInActiveWindow != null) {
                     currentUrl = findUrlInNode(rootInActiveWindow, packageName)
-                    Log.d(TAG, "Current URL (heuristic): $currentUrl from package $packageName")
-                } else {
-                    Log.d(TAG, "Not a tracked browser: $packageName. Clearing current URL.")
+                    // Log.d(TAG, "Current URL (heuristic): $currentUrl from browser $packageName")
                 }
             }
             handleTimeTracking(currentUrl, packageName)
@@ -59,45 +64,58 @@ class WebsiteBlockerService : AccessibilityService() {
                 packageName.contains("duckduckgo") ||
                 packageName.contains("brave") ||
                 packageName.contains("edge") ||
-                packageName.contains("webview") // Generic for apps embedding webviews
-                // Add other browser package names if necessary
+                packageName.contains("samsung.android.browser") ||
+                packageName.contains("webview") // More generic, but could be other apps embedding webviews
                 )
     }
 
-
     private fun handleTimeTracking(currentUrl: String?, currentPackageName: String?) {
-        val previouslyTrackedHostname = currentlyTrackedHostname
-        var newTrackedHostname: String? = null
+        val previouslyTrackedIdentifier = currentlyTrackedIdentifier
+        var newTrackedIdentifier: String? = null
+        var newTrackedItemType: BlockType? = null
 
-        if (currentUrl != null && isBrowserApp(currentPackageName)) {
-            distractingWebsites.find { currentUrl.contains(it.hostname, ignoreCase = true) }?.let {
-                newTrackedHostname = it.hostname
+        // Priority 1: Check for blocked APP by package name
+        if (currentPackageName != null) {
+            blockedItems.find { it.identifier == currentPackageName && it.type == BlockType.APP }?.let {
+                newTrackedIdentifier = it.identifier
+                newTrackedItemType = it.type
+                // Log.d(TAG, "Matched APP: ${it.displayName ?: it.identifier}")
             }
         }
 
-        if (previouslyTrackedHostname != null && previouslyTrackedHostname != newTrackedHostname) {
-            // User navigated away from a tracked site or switched app
-            finalizeSession(previouslyTrackedHostname)
+        // Priority 2: If not an explicitly blocked app, check for blocked WEBSITE by URL (if in a browser)
+        if (newTrackedIdentifier == null && currentUrl != null && isBrowserApp(currentPackageName)) {
+            blockedItems.find { it.type == BlockType.WEBSITE && currentUrl.contains(it.identifier, ignoreCase = true) }?.let {
+                newTrackedIdentifier = it.identifier
+                newTrackedItemType = it.type
+                // Log.d(TAG, "Matched WEBSITE: ${it.displayName ?: it.identifier} in $currentPackageName")
+            }
         }
 
-        if (newTrackedHostname != null && previouslyTrackedHostname != newTrackedHostname) {
-            // User navigated to a new distracting site
-            startNewSession(newTrackedHostname!!)
-        } else if (newTrackedHostname == null && previouslyTrackedHostname != null) {
-            // User navigated away from any distracting site (e.g. to a non-distracting URL or different app)
-             finalizeSession(previouslyTrackedHostname)
+        if (previouslyTrackedIdentifier != null && previouslyTrackedIdentifier != newTrackedIdentifier) {
+            // User navigated away from a tracked item or switched app/URL context
+            finalizeSession(previouslyTrackedIdentifier)
+        }
+
+        if (newTrackedIdentifier != null && newTrackedIdentifier != previouslyTrackedIdentifier) {
+            // User navigated to a new blocked item (app or website)
+            startNewSession(newTrackedIdentifier!!, newTrackedItemType!!)
+        } else if (newTrackedIdentifier == null && previouslyTrackedIdentifier != null) {
+            // User navigated away from any distracting item (e.g., to a non-distracting URL/app)
+            finalizeSession(previouslyTrackedIdentifier)
         }
     }
 
-    private fun startNewSession(hostname: String) {
-        Log.i(TAG, "Starting new session for: $hostname")
-        currentlyTrackedHostname = hostname
+    private fun startNewSession(identifier: String, type: BlockType) {
+        Log.i(TAG, "Starting new session for: $identifier (Type: $type)")
+        currentlyTrackedIdentifier = identifier
+        currentItemType = type
         sessionStartTimeMillis = SystemClock.elapsedRealtime()
     }
 
-    private fun finalizeSession(hostname: String?) {
-        if (hostname == null || sessionStartTimeMillis == null) {
-            Log.d(TAG, "FinalizeSession called with no active session for $hostname")
+    private fun finalizeSession(identifier: String?) {
+        if (identifier == null || sessionStartTimeMillis == null) {
+            // Log.d(TAG, "FinalizeSession called with no active session for $identifier")
             clearCurrentSession()
             return
         }
@@ -105,58 +123,76 @@ class WebsiteBlockerService : AccessibilityService() {
         val endTimeMillis = SystemClock.elapsedRealtime()
         val sessionDurationMillis = endTimeMillis - sessionStartTimeMillis!!
         if (sessionDurationMillis <= 0) {
-             Log.d(TAG, "FinalizeSession: session duration is zero or negative for $hostname, skipping update.")
-             clearCurrentSession()
-             return
+            // Log.d(TAG, "FinalizeSession: session duration is zero or negative for $identifier, skipping update.")
+            clearCurrentSession()
+            return
         }
 
-
-        val previousTotalUsage = websiteUsageTodayMillis.getOrDefault(hostname, 0L)
+        val previousTotalUsage = itemUsageTodayMillis.getOrDefault(identifier, 0L)
         val newTotalUsage = previousTotalUsage + sessionDurationMillis
+        itemUsageTodayMillis[identifier] = newTotalUsage
 
-        websiteUsageTodayMillis[hostname] = newTotalUsage
-
-        Log.i(TAG, "Finalized session for $hostname. Duration: ${sessionDurationMillis / 1000}s. Total today: ${newTotalUsage / 1000}s")
+        val itemConfig = blockedItems.find { it.identifier == identifier }
+        Log.i(TAG, "Finalized session for ${itemConfig?.displayName ?: identifier}. Duration: ${sessionDurationMillis / 1000}s. Total today: ${newTotalUsage / 1000}s")
         clearCurrentSession()
 
-        // TODO: Check if usage exceeds limit
-        checkUsageLimits(hostname, newTotalUsage)
+        checkUsageLimits(identifier, newTotalUsage)
     }
     
     private fun clearCurrentSession() {
-        currentlyTrackedHostname = null
+        currentlyTrackedIdentifier = null
+        currentItemType = null
         sessionStartTimeMillis = null
-        Log.d(TAG, "Current session cleared.")
+        // Log.d(TAG, "Current session cleared.")
     }
 
-    private fun checkUsageLimits(hostname: String, totalUsageMillis: Long) {
-        val siteConfig = distractingWebsites.find { it.hostname == hostname }
-        if (siteConfig != null) {
-            val limitMillis = siteConfig.timeLimitInMinutes * 60 * 1000
-            if (totalUsageMillis >= limitMillis) {
-                Log.w(TAG, "Time limit EXCEEDED for $hostname! Usage: ${totalUsageMillis / 1000}s, Limit: ${limitMillis / 1000}s")
-                // TODO: Implement blocking action!
-                // For now, just log. We will add the blocking screen next.
-                // showBlockScreen(hostname)
+    private fun checkUsageLimits(identifier: String, totalUsageMillis: Long) {
+        val itemConfig = blockedItems.find { it.identifier == identifier }
+        if (itemConfig != null) {
+            val limitMillis = itemConfig.timeLimitInMinutes * 60 * 1000
+            if (limitMillis > 0 && totalUsageMillis >= limitMillis) { // Only block if limit > 0
+                Log.w(TAG, "Time limit EXCEEDED for ${itemConfig.displayName ?: identifier}! Usage: ${totalUsageMillis / 1000}s, Limit: ${limitMillis / 1000}s")
+                showBlockScreen(itemConfig)
             } else {
-                 Log.i(TAG, "Time limit NOT exceeded for $hostname. Usage: ${totalUsageMillis / 1000}s, Limit: ${limitMillis / 1000}s")
+                 Log.i(TAG, "Time limit NOT YET exceeded for ${itemConfig.displayName ?: identifier}. Usage: ${totalUsageMillis / 1000}s, Limit: ${limitMillis / 1000}s")
             }
         }
     }
 
+    private fun showBlockScreen(item: BlockedItem) {
+        val intent = Intent(this, BlockActivity::class.java)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP) // Clears other instances of BlockActivity if any
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        intent.putExtra(BlockActivity.EXTRA_BLOCKED_ITEM_NAME, item.displayName ?: item.identifier)
+        intent.putExtra(BlockActivity.EXTRA_BLOCKED_ITEM_IDENTIFIER, item.identifier)
+        try {
+            startActivity(intent)
+            Log.i(TAG, "BlockActivity launched for ${item.displayName ?: item.identifier}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error launching BlockActivity: ", e)
+            // Fallback or error handling if activity cannot be started from service
+            // This might happen due to background activity start restrictions on newer Android versions
+            // Consider posting a high-priority notification instead as a fallback.
+        }
+    }
 
+    // ... (findUrlInNode and findUrlRecursive methods remain largely the same, ensure they are present) ...
+    // findUrlInNode might need minor logging adjustments if any, but core logic should be fine.
+    // findUrlRecursive can remain as is.
+
+    // Ensure these methods are present and correct from the previous version.
     // This is a very basic and often unreliable way to get a URL.
-    // More robust solutions might involve looking for specific view IDs for URL bars in known browsers,
-    // or using browser extensions if developing for a specific browser.
     private fun findUrlInNode(nodeInfo: AccessibilityNodeInfo?, packageName: String): String? {
         if (nodeInfo == null) return null
 
-        // Attempt to find URL bar by common resource IDs for specific browsers
-        // These IDs can change with browser updates and vary between browser versions.
         val urlBarIds = when {
             packageName.contains("chrome") -> listOf("com.android.chrome:id/url_bar", "com.android.chrome:id/location_bar")
-            packageName.contains("firefox") -> listOf("org.mozilla.firefox:id/url_bar_title", "org.mozilla.firefox:id/mozac_browser_toolbar_url_view") // Example, actual IDs may vary
-            // Add more browser specific IDs here
+            packageName.contains("firefox") -> listOf("org.mozilla.firefox:id/url_bar_title", "org.mozilla.firefox:id/mozac_browser_toolbar_url_view", "org.mozilla.firefox:id/toolbar_input")
+            packageName.contains("duckduckgo") -> listOf("com.duckduckgo.mobile.android:id/omnibarTextInput")
+            packageName.contains("brave") -> listOf("com.brave.browser:id/url_bar") // Often similar to Chrome
+            packageName.contains("edge") -> listOf("com.microsoft.emmx:id/url_bar")
+            packageName.contains("samsung.android.browser") -> listOf("com.sec.android.app.sbrowser:id/location_bar_edit_text")
             else -> emptyList()
         }
 
@@ -167,17 +203,20 @@ class WebsiteBlockerService : AccessibilityService() {
                     if (node != null && node.text != null) {
                         val text = node.text.toString()
                         if (text.startsWith("http://") || text.startsWith("https://") || text.contains(".")) {
-                             Log.d(TAG, "URL found via ID '$id': $text")
+                             Log.d(TAG, "URL found via ID '$id' for $packageName: $text")
                             return text
                         }
                     }
+                    node?.recycle() // Recycle node after use
                 }
+                urlBarNodes.forEach { it?.recycle() } // Ensure all nodes in list are recycled
             }
         }
         
-        // Fallback: A more generic search for text that looks like a URL (less reliable)
-        // This recursive search can be heavy. Use with caution or optimize.
-        return findUrlRecursive(nodeInfo)
+        // Fallback: Recursive search (can be heavy, consider if it's still needed or can be optimized)
+        // Log.d(TAG, "No specific URL bar ID match for $packageName, trying recursive search...")
+        // return findUrlRecursive(nodeInfo) // Commenting out for now to test ID-based first.
+        return null // Preferring specific ID matches for now
     }
 
     private fun findUrlRecursive(nodeInfo: AccessibilityNodeInfo?): String? {
@@ -185,25 +224,21 @@ class WebsiteBlockerService : AccessibilityService() {
 
         if (nodeInfo.text != null) {
             val text = nodeInfo.text.toString().trim()
-            // Basic check for a URL-like pattern (very simplistic and can have false positives)
             if (text.length > 5 && text.contains(".") && !text.contains(" ") &&
                 (text.startsWith("http") || text.startsWith("www.") || text.count { it == '.' } >= 1)) {
                 
                 val viewId = nodeInfo.viewIdResourceName
                 val className = nodeInfo.className?.toString() ?: ""
 
-                // Prioritize EditTexts or views that are likely to hold URLs
                 if (className.contains("EditText", ignoreCase = true) ||
-                    className.contains("TextView", ignoreCase = true) || // Some browsers display URL in TextView when not focused
+                    className.contains("TextView", ignoreCase = true) ||
                     className.contains("WebView", ignoreCase = true)) {
                     
-                    // Additional heuristics: avoid excessively long text, text with newlines, or non-ASCII heavy text
                     if (text.length < 2048 && !text.contains("\n") && text.isNotBlank()) {
-                         Log.d(TAG, "Potential URL in EditText/TextView/WebView by ID '$viewId' or Class '$className': $text")
-                        // More stringent check if it's an EditText
+                         // Log.d(TAG, "Potential URL in EditText/TextView/WebView by ID '$viewId' or Class '$className': $text")
                         if (className.contains("EditText", ignoreCase = true) && (text.startsWith("http") || text.startsWith("www."))) {
                             return text
-                        } else if (!className.contains("EditText", ignoreCase = true)){ // Be a bit more lenient for TextView/WebView
+                        } else if (!className.contains("EditText", ignoreCase = true)){ 
                              return text
                         }
                     }
@@ -213,12 +248,12 @@ class WebsiteBlockerService : AccessibilityService() {
 
         for (i in 0 until (nodeInfo.childCount ?: 0)) {
             val child = nodeInfo.getChild(i)
-            val url = findUrlRecursive(child) // Recursive call
+            val url = findUrlRecursive(child)
             if (url != null) {
-                // Don't recycle child if URL found, as nodeInfo might be part of that URL path
+                // child?.recycle() // Do not recycle if URL found, parent might need it
                 return url
             }
-            child?.recycle() // Recycle if no URL found in this branch
+            child?.recycle()
         }
         return null
     }
@@ -226,30 +261,26 @@ class WebsiteBlockerService : AccessibilityService() {
 
     override fun onInterrupt() {
         Log.w(TAG, "onInterrupt: Service interrupted. Finalizing any active session.")
-        finalizeSession(currentlyTrackedHostname)
+        finalizeSession(currentlyTrackedIdentifier)
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        val serviceInfo = this.serviceInfo ?: AccessibilityServiceInfo() // Use existing or create new
-        serviceInfo.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_FOCUSED
-        serviceInfo.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-        serviceInfo.flags = serviceInfo.flags or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-        serviceInfo.packageNames = null // Monitor all packages initially
-        // serviceInfo.packageNames = arrayOf("com.android.chrome", "org.mozilla.firefox") // Example: To restrict to specific browsers
-
-        this.serviceInfo = serviceInfo
+        val currentServiceInfo = this.serviceInfo ?: AccessibilityServiceInfo()
+        currentServiceInfo.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED // or AccessibilityEvent.TYPE_VIEW_FOCUSED
+        currentServiceInfo.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        currentServiceInfo.flags = (currentServiceInfo.flags ?: 0) or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS // Ensure flags are ORed correctly
+        currentServiceInfo.packageNames = null // Monitor all packages
+        
+        this.serviceInfo = currentServiceInfo
         Log.i(TAG, "onServiceConnected: WebsiteBlockerService connected.")
-        // TODO: Initialize usage data, load distracting sites from storage
-        // For now, usage is reset when service restarts.
-        websiteUsageTodayMillis.clear()
-        Log.d(TAG, "Website usage data cleared on service connect.")
+        itemUsageTodayMillis.clear()
+        Log.d(TAG, "Item usage data cleared on service connect.")
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         Log.i(TAG, "onUnbind: WebsiteBlockerService unbound. Finalizing any active session.")
-        finalizeSession(currentlyTrackedHostname)
-        // TODO: Clean up resources, save final state
+        finalizeSession(currentlyTrackedIdentifier)
         return super.onUnbind(intent)
     }
 } 
