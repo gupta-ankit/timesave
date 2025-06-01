@@ -13,6 +13,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var textViewStatus: TextView
     private lateinit var buttonEnableService: Button
+    private lateinit var buttonOpenSettings: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -20,6 +21,7 @@ class MainActivity : AppCompatActivity() {
 
         textViewStatus = findViewById(R.id.textViewStatus)
         buttonEnableService = findViewById(R.id.buttonEnableService)
+        buttonOpenSettings = findViewById(R.id.buttonOpenSettings)
 
         buttonEnableService.setOnClickListener {
             try {
@@ -33,6 +35,11 @@ class MainActivity : AppCompatActivity() {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
             }
+        }
+
+        buttonOpenSettings.setOnClickListener {
+            val intent = Intent(this, SettingsActivity::class.java)
+            startActivity(intent)
         }
     }
 

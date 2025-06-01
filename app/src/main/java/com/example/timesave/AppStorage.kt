@@ -123,12 +123,12 @@ object AppStorage {
 
     internal fun getDefaultBlockedItems(): List<BlockedItem> {
         return listOf(
-            BlockedItem("youtube.com", BlockType.WEBSITE, 0, "YouTube Website"), // Shortened for testing
-            BlockedItem("com.google.android.youtube", BlockType.APP, 1, "YouTube App"), // Shortened for testing
-            BlockedItem("facebook.com", BlockType.WEBSITE, 1, "Facebook Website"),
-            BlockedItem("com.facebook.katana", BlockType.APP, 1, "Facebook App"),
-            BlockedItem("instagram.com", BlockType.WEBSITE, 1, "Instagram Website"),
-            BlockedItem("com.instagram.android", BlockType.APP, 1, "Instagram App")
+            BlockedItem("com.example.blockedapp", BlockType.APP, 0, "InstaBlock Test App (0 min)"), // For testing 0 min block
+            BlockedItem("youtube.com", BlockType.WEBSITE, 60, "YouTube Website"),
+            BlockedItem("com.google.android.youtube", BlockType.APP, 60, "YouTube App"),
+            BlockedItem("facebook.com", BlockType.WEBSITE, 30, "Facebook Website"),
+            BlockedItem("com.facebook.katana", BlockType.APP, 30, "Facebook App")
+            // Add more defaults as needed
         )
     }
 } 
