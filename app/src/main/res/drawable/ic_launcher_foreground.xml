@@ -4,6 +4,17 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- Shield Path -->
+    <path
+        android:fillColor="#3F51B5" 
+        android:pathData="M54,12 C54,12 24,24 24,48 C24,72 54,96 54,96 C54,96 84,72 84,48 C84,24 54,12 54,12 Z"/>
+
+    <!-- Pause Symbol (Two Vertical Bars) -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M46,40 h-6 v28 h6 V40 Z M68,40 h-6 v28 h6 V40 Z"/>
+
     <path android:pathData="M31,63.928c0,0 6.4,-11 12.1,-13.1c7.2,-2.6 26,-1.4 26,-1.4l38.1,38.1L107,108.928l-32,-1L31,63.928z">
         <aapt:attr name="android:fillColor">
             <gradient
