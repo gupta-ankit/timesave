@@ -13,16 +13,19 @@ import android.view.accessibility.AccessibilityNodeInfo
 class WebsiteBlockerService : AccessibilityService() {
 
     private val TAG = "WebsiteBlockerService"
-    private val CHECK_INTERVAL_MS = 30 * 1000L // 30 seconds
+    private val CHECK_INTERVAL_MS = 30 * 1000L
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var usageCheckRunnable: Runnable
 
-    private lateinit var blockedItems: List<BlockedItem> // Now loaded from storage
-    private lateinit var itemUsageTodayMillis: MutableMap<String, Long> // Now loaded from storage
+    private lateinit var distractingItems: List<BlockedItem>
+    private lateinit var itemUsageTodayMillis: MutableMap<String, Long> // For individual stats, if needed
+    
+    private var defaultGroupTimeLimitMillis: Long = 0L
+    private var defaultGroupUsageTodayMillis: Long = 0L
 
     private var currentlyTrackedIdentifier: String? = null
-    private var currentItemType: BlockType? = null
+    private var currentlyTrackedItemConfig: BlockedItem? = null // Store the full item for groupId access
     private var sessionStartTimeMillis: Long? = null
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -31,10 +34,8 @@ class WebsiteBlockerService : AccessibilityService() {
             val packageName = event.packageName?.toString()
             val rootInActiveWindow: AccessibilityNodeInfo? = rootInActiveWindow
             var currentUrl: String? = null
-            if (packageName != null) {
-                if (isBrowserApp(packageName) && rootInActiveWindow != null) {
-                    currentUrl = findUrlInNode(rootInActiveWindow, packageName)
-                }
+            if (packageName != null && isBrowserApp(packageName) && rootInActiveWindow != null) {
+                currentUrl = findUrlInNode(rootInActiveWindow, packageName)
             }
             handleTimeTracking(currentUrl, packageName)
         }
@@ -45,110 +46,96 @@ class WebsiteBlockerService : AccessibilityService() {
     }
 
     private fun handleTimeTracking(currentUrl: String?, currentPackageName: String?) {
-        val previouslyTrackedIdentifier = currentlyTrackedIdentifier
-        var newTrackedIdentifier: String? = null
-        var newTrackedItemType: BlockType? = null
+        val previouslyTrackedItem = currentlyTrackedItemConfig
+        var newTrackedItem: BlockedItem? = null
 
         if (currentPackageName != null) {
-            blockedItems.find { it.identifier == currentPackageName && it.type == BlockType.APP }?.let {
-                newTrackedIdentifier = it.identifier
-                newTrackedItemType = it.type
-            }
+            newTrackedItem = distractingItems.find { it.identifier == currentPackageName && it.type == BlockType.APP && it.groupId == AppStorage.DEFAULT_GROUP_ID }
         }
-        if (newTrackedIdentifier == null && currentUrl != null && isBrowserApp(currentPackageName)) {
-            blockedItems.find { it.type == BlockType.WEBSITE && currentUrl.contains(it.identifier, ignoreCase = true) }?.let {
-                newTrackedIdentifier = it.identifier
-                newTrackedItemType = it.type
-            }
+        if (newTrackedItem == null && currentUrl != null && isBrowserApp(currentPackageName)) {
+            newTrackedItem = distractingItems.find { it.type == BlockType.WEBSITE && currentUrl.contains(it.identifier, ignoreCase = true) && it.groupId == AppStorage.DEFAULT_GROUP_ID }
         }
-        if (previouslyTrackedIdentifier != null && previouslyTrackedIdentifier != newTrackedIdentifier) {
-            finalizeSession(previouslyTrackedIdentifier)
+
+        if (previouslyTrackedItem != null && previouslyTrackedItem.identifier != newTrackedItem?.identifier) {
+            finalizeSession(previouslyTrackedItem)
         }
-        if (newTrackedIdentifier != null && newTrackedIdentifier != previouslyTrackedIdentifier) {
-            startNewSession(newTrackedIdentifier!!, newTrackedItemType!!)
-        } else if (newTrackedIdentifier == null && previouslyTrackedIdentifier != null) {
-            finalizeSession(previouslyTrackedIdentifier)
+
+        if (newTrackedItem != null && newTrackedItem.identifier != previouslyTrackedItem?.identifier) {
+            startNewSession(newTrackedItem)
+        } else if (newTrackedItem == null && previouslyTrackedItem != null) {
+            finalizeSession(previouslyTrackedItem)
         }
     }
 
-    private fun startNewSession(identifier: String, type: BlockType) {
-        Log.i(TAG, "Starting new session for: $identifier (Type: $type)")
-        currentlyTrackedIdentifier = identifier
-        currentItemType = type
+    private fun startNewSession(item: BlockedItem) {
+        Log.i(TAG, "Starting new session for distracting item: ${item.displayName ?: item.identifier} (Group: ${item.groupId})")
+        currentlyTrackedIdentifier = item.identifier // Keep for compatibility if needed elsewhere
+        currentlyTrackedItemConfig = item
         sessionStartTimeMillis = SystemClock.elapsedRealtime()
 
-        // Check for immediate block if time limit is 0
-        val itemConfig = blockedItems.find { it.identifier == identifier }
-        if (itemConfig != null && itemConfig.timeLimitInMinutes == 0L) {
-            Log.w(TAG, "Immediate block triggered for ${itemConfig.displayName ?: identifier} (0 min limit).")
-            // We don't need to finalize a session with duration, just show block screen.
-            // The periodic checker will also catch this, but this is faster.
-            showBlockScreen(itemConfig) 
-            // We might want to clear the current session here as well, 
-            // as showBlockScreen might not inherently stop further tracking if the user somehow gets back.
-            // However, GLOBAL_ACTION_HOME should prevent that.
-            // clearCurrentSession() // Consider if this is needed if GLOBAL_ACTION_HOME fails
+        if (item.groupId == AppStorage.DEFAULT_GROUP_ID && defaultGroupTimeLimitMillis == 0L) {
+            Log.w(TAG, "Immediate block: Default group limit is 0. Blocking ${item.displayName ?: item.identifier}")
+            showBlockScreen(item)
         }
     }
 
-    private fun finalizeSession(identifier: String?, preemptiveBlock: Boolean = false) {
-        if (identifier == null || sessionStartTimeMillis == null) {
+    private fun finalizeSession(itemConfigToFinalize: BlockedItem?, preemptiveBlock: Boolean = false) {
+        if (itemConfigToFinalize == null || sessionStartTimeMillis == null) {
             clearCurrentSession()
             return
         }
+
         val endTimeMillis = SystemClock.elapsedRealtime()
         val sessionDurationMillis = endTimeMillis - sessionStartTimeMillis!!
-        if (sessionDurationMillis > 0) {
-            val previousTotalUsage = itemUsageTodayMillis.getOrDefault(identifier, 0L)
-            val newTotalUsage = previousTotalUsage + sessionDurationMillis
-            itemUsageTodayMillis[identifier] = newTotalUsage
-            AppStorage.saveItemUsage(this, itemUsageTodayMillis) // Save usage
-            val itemConfigForLog = blockedItems.find { it.identifier == identifier }
-            Log.i(TAG, "Finalized session for ${itemConfigForLog?.displayName ?: identifier}. Duration: ${sessionDurationMillis / 1000}s. Total today: ${newTotalUsage / 1000}s")
+
+        if (sessionDurationMillis > 0 && itemConfigToFinalize.groupId == AppStorage.DEFAULT_GROUP_ID) {
+            // Update individual item usage (for stats)
+            val previousIndividualUsage = itemUsageTodayMillis.getOrDefault(itemConfigToFinalize.identifier, 0L)
+            val newIndividualUsage = previousIndividualUsage + sessionDurationMillis
+            itemUsageTodayMillis[itemConfigToFinalize.identifier] = newIndividualUsage
+            AppStorage.saveItemUsage(this, itemUsageTodayMillis)
+
+            // Update default group usage
+            defaultGroupUsageTodayMillis += sessionDurationMillis
+            AppStorage.saveGroupUsage(this, AppStorage.DEFAULT_GROUP_ID, defaultGroupUsageTodayMillis)
+            
+            Log.i(TAG, "Finalized session for ${itemConfigToFinalize.displayName ?: itemConfigToFinalize.identifier}. Group: ${itemConfigToFinalize.groupId}. Duration: ${sessionDurationMillis / 1000}s. Group total: ${defaultGroupUsageTodayMillis / 1000}s")
+            
             if (!preemptiveBlock) {
-                 checkUsageLimitsAndBlockIfNeeded(identifier, newTotalUsage, false)
+                 checkGroupUsageLimitAndBlockIfNeeded(itemConfigToFinalize, defaultGroupUsageTodayMillis, defaultGroupTimeLimitMillis)
             }
-        } else if (!preemptiveBlock) {
-             val recordedUsageMillis = itemUsageTodayMillis.getOrDefault(identifier, 0L)
-             checkUsageLimitsAndBlockIfNeeded(identifier, recordedUsageMillis, false)
+        } else if (!preemptiveBlock && itemConfigToFinalize.groupId == AppStorage.DEFAULT_GROUP_ID) {
+             checkGroupUsageLimitAndBlockIfNeeded(itemConfigToFinalize, defaultGroupUsageTodayMillis, defaultGroupTimeLimitMillis)
         }
         
-        val itemConfig = blockedItems.find { it.identifier == identifier }
-        if (preemptiveBlock && itemConfig != null) {
-            showBlockScreen(itemConfig)
+        if (preemptiveBlock) { // itemConfigToFinalize must be non-null if preemptiveBlock is true from periodic check
+            showBlockScreen(itemConfigToFinalize)
         }
         clearCurrentSession()
     }
     
     private fun clearCurrentSession() {
         currentlyTrackedIdentifier = null
-        currentItemType = null
+        currentlyTrackedItemConfig = null
         sessionStartTimeMillis = null
     }
 
-    private fun checkUsageLimitsAndBlockIfNeeded(identifier: String, totalUsageMillis: Long, isPeriodicCheck: Boolean) {
-        val itemConfig = blockedItems.find { it.identifier == identifier }
-        if (itemConfig != null) {
-            val limitMillis = itemConfig.timeLimitInMinutes * 60 * 1000
+    // Updated signature to take group usage and limit
+    private fun checkGroupUsageLimitAndBlockIfNeeded(currentItem: BlockedItem, groupUsage: Long, groupLimit: Long, isPeriodicCheck: Boolean = false) {
+        if (currentItem.groupId != AppStorage.DEFAULT_GROUP_ID) return // Only act on default group for now
 
-            // If limit is 0, it means block immediately. This should be caught by startNewSession or periodic check.
-            // This function is typically called after a session, so if limit is 0, it implies it should have been blocked already.
-            if (itemConfig.timeLimitInMinutes == 0L) {
-                 if (!isPeriodicCheck) { // Avoid double logging if periodic check also caught it
-                    Log.w(TAG, "Normal Check: Item '${itemConfig.displayName ?: identifier}' has 0 min limit and was accessed. Should be blocked.")
-                 }
-                 showBlockScreen(itemConfig) // Ensure block screen is shown
-                 return
-            }
+        if (groupLimit == 0L && groupUsage > 0) { 
+            Log.w(TAG, "Group '${currentItem.groupId}' limit is 0. Blocking ${currentItem.displayName ?: currentItem.identifier} due to usage.")
+            showBlockScreen(currentItem)
+            return
+        }
 
-            if (limitMillis > 0 && totalUsageMillis >= limitMillis) {
-                if (!isPeriodicCheck) {
-                    Log.w(TAG, "Normal Check: Time limit EXCEEDED for ${itemConfig.displayName ?: identifier}!")
-                }
-                showBlockScreen(itemConfig)
-            } else {
-                 Log.i(TAG, "Time limit NOT YET exceeded for ${itemConfig.displayName ?: identifier}.")
-            }
+        if (groupLimit > 0 && groupUsage >= groupLimit) {
+            val logPrefix = if (isPeriodicCheck) "Periodic Check: " else ""
+            Log.w(TAG, "${logPrefix}Group '${currentItem.groupId}' time limit EXCEEDED! Total: ${groupUsage/1000}s, Limit: ${groupLimit/1000}s. Blocking ${currentItem.displayName ?: currentItem.identifier}")
+            showBlockScreen(currentItem)
+        } else {
+             Log.i(TAG, "Group '${currentItem.groupId}' time limit NOT YET exceeded. Total: ${groupUsage/1000}s, Limit: ${groupLimit/1000}s")
         }
     }
 
@@ -159,12 +146,11 @@ class WebsiteBlockerService : AccessibilityService() {
         intent.putExtra(BlockActivity.EXTRA_BLOCKED_ITEM_IDENTIFIER, item.identifier)
         try {
             startActivity(intent)
-            Log.i(TAG, "BlockActivity launched for ${item.displayName ?: item.identifier}")
-            val homeActionSuccess = performGlobalAction(GLOBAL_ACTION_HOME)
-            Log.i(TAG, "Attempted GLOBAL_ACTION_HOME. Success: $homeActionSuccess")
+            Log.i(TAG, "BlockActivity launched for ${item.displayName ?: item.identifier} (Group: ${item.groupId}).")
+            performGlobalAction(GLOBAL_ACTION_HOME)
         } catch (e: Exception) {
             Log.e(TAG, "Error launching BlockActivity or performing home action: ", e)
-            performGlobalAction(GLOBAL_ACTION_HOME) // Fallback attempt
+            performGlobalAction(GLOBAL_ACTION_HOME) 
         }
     }
 
@@ -186,6 +172,8 @@ class WebsiteBlockerService : AccessibilityService() {
                     if (node != null && node.text != null) {
                         val text = node.text.toString()
                         if (text.startsWith("http://") || text.startsWith("https://") || text.contains(".")) {
+                            node.recycle() // Recycle node after use
+                            urlBarNodes.forEach { it?.recycle() } // Recycle list nodes
                             return text
                         }
                     }
@@ -199,26 +187,29 @@ class WebsiteBlockerService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        // Load configuration and usage data
-        blockedItems = AppStorage.loadBlockedItems(this)
-        itemUsageTodayMillis = AppStorage.clearUsageIfNewDay(this) // Also handles daily reset
+        Log.i(TAG, "onServiceConnected: WebsiteBlockerService connecting...")
+        distractingItems = AppStorage.loadBlockedItems(this)
+        defaultGroupTimeLimitMillis = AppStorage.loadGroupTimeLimit(this, AppStorage.DEFAULT_GROUP_ID) * 60 * 1000
 
-        if (blockedItems.isEmpty()) {
-            // This means AppStorage returned its default because nothing was saved.
-            // Let's save these defaults now so they persist for next time.
-            blockedItems = AppStorage.getDefaultBlockedItems() // Get them again
-            AppStorage.saveBlockedItems(this, blockedItems)
-            Log.i(TAG, "No saved blocked items found. Loaded and saved default items.")
+        val dailyData = AppStorage.clearUsageIfNewDay(this)
+        itemUsageTodayMillis = dailyData.itemUsage
+        defaultGroupUsageTodayMillis = dailyData.groupUsage[AppStorage.DEFAULT_GROUP_ID] ?: 0L
+
+        if (distractingItems.isEmpty()) {
+            distractingItems = AppStorage.getDefaultBlockedItems()
+            AppStorage.saveBlockedItems(this, distractingItems)
+            Log.i(TAG, "No saved distracting items. Loaded and saved default items.")
         }
 
         val currentServiceInfo = this.serviceInfo ?: AccessibilityServiceInfo()
         currentServiceInfo.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         currentServiceInfo.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         currentServiceInfo.flags = (currentServiceInfo.flags ?: 0) or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-        currentServiceInfo.packageNames = null
+        currentServiceInfo.packageNames = null 
         this.serviceInfo = currentServiceInfo
-        Log.i(TAG, "onServiceConnected: WebsiteBlockerService connected. Loaded ${blockedItems.size} items.")
-        Log.d(TAG, "Initial usage data: $itemUsageTodayMillis")
+        
+        Log.i(TAG, "Service connected. Monitoring ${distractingItems.size} items in group '${AppStorage.DEFAULT_GROUP_ID}'.")
+        Log.i(TAG, "Default group limit: ${defaultGroupTimeLimitMillis / (60*1000)} minutes. Current group usage: ${defaultGroupUsageTodayMillis / 1000}s.")
 
         setupPeriodicCheck()
         handler.post(usageCheckRunnable) 
@@ -226,37 +217,30 @@ class WebsiteBlockerService : AccessibilityService() {
 
     private fun setupPeriodicCheck() {
         usageCheckRunnable = Runnable {
-            checkCurrentItemUsageLimit()
+            checkCurrentItemGroupUsageLimit()
             handler.postDelayed(usageCheckRunnable, CHECK_INTERVAL_MS)
         }
     }
 
-    private fun checkCurrentItemUsageLimit() {
-        val trackedId = currentlyTrackedIdentifier
+    private fun checkCurrentItemGroupUsageLimit() {
+        val currentItem = currentlyTrackedItemConfig
         val sessionStart = sessionStartTimeMillis
 
-        if (trackedId != null && sessionStart != null) {
-            val itemConfig = blockedItems.find { it.identifier == trackedId }
-            if (itemConfig != null) { // Check if itemConfig is found
-                val limitMillis = itemConfig.timeLimitInMinutes * 60 * 1000
-                
-                if (limitMillis == 0L) { // Handle 0 minute limit separately for periodic check
-                    Log.w(TAG, "Periodic Check: Immediate block condition for ${itemConfig.displayName ?: trackedId} (0 min limit).")
-                    finalizeSession(trackedId, true) // true for preemptive block
-                    return // No further duration check needed
-                }
+        if (currentItem != null && currentItem.groupId == AppStorage.DEFAULT_GROUP_ID && sessionStart != null) {
+            if (defaultGroupTimeLimitMillis == 0L) { 
+                Log.w(TAG, "Periodic Check: Default group limit is 0. Blocking active item ${currentItem.displayName ?: currentItem.identifier}")
+                finalizeSession(currentItem, true) 
+                return
+            }
 
-                // Only proceed with duration checks if limit > 0
-                if (itemConfig.timeLimitInMinutes > 0) { 
-                    val currentTimeMillis = SystemClock.elapsedRealtime()
-                    val currentSessionDurationMillis = currentTimeMillis - sessionStart
-                    val recordedUsageMillis = itemUsageTodayMillis.getOrDefault(trackedId, 0L)
-                    val hypotheticalTotalUsageMillis = recordedUsageMillis + currentSessionDurationMillis
+            if (defaultGroupTimeLimitMillis > 0) { 
+                val currentTime = SystemClock.elapsedRealtime()
+                val currentSessionDuration = currentTime - sessionStart
+                val hypotheticalTotalGroupUsage = defaultGroupUsageTodayMillis + currentSessionDuration
 
-                    if (hypotheticalTotalUsageMillis >= limitMillis) {
-                        Log.w(TAG, "Periodic Check: Time limit EXCEEDED for ${itemConfig.displayName ?: trackedId}!")
-                        finalizeSession(trackedId, true)
-                    }
+                if (hypotheticalTotalGroupUsage >= defaultGroupTimeLimitMillis) {
+                    Log.w(TAG, "Periodic Check: Default group time limit EXCEEDED for active item ${currentItem.displayName ?: currentItem.identifier}! Hypo Usage: ${hypotheticalTotalGroupUsage/1000}s")
+                    finalizeSession(currentItem, true)
                 }
             }
         }
@@ -265,15 +249,17 @@ class WebsiteBlockerService : AccessibilityService() {
     override fun onInterrupt() {
         Log.w(TAG, "onInterrupt: Service interrupted.")
         handler.removeCallbacks(usageCheckRunnable)
-        finalizeSession(currentlyTrackedIdentifier) // This will save current session usage
-        AppStorage.saveItemUsage(this, itemUsageTodayMillis) // Ensure all usage is saved
+        finalizeSession(currentlyTrackedItemConfig) 
+        AppStorage.saveGroupUsage(this, AppStorage.DEFAULT_GROUP_ID, defaultGroupUsageTodayMillis) 
+        AppStorage.saveItemUsage(this, itemUsageTodayMillis) 
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         Log.i(TAG, "onUnbind: WebsiteBlockerService unbound.")
         handler.removeCallbacks(usageCheckRunnable)
-        finalizeSession(currentlyTrackedIdentifier) // This will save current session usage
-        AppStorage.saveItemUsage(this, itemUsageTodayMillis) // Ensure all usage is saved
+        finalizeSession(currentlyTrackedItemConfig) 
+        AppStorage.saveGroupUsage(this, AppStorage.DEFAULT_GROUP_ID, defaultGroupUsageTodayMillis)
+        AppStorage.saveItemUsage(this, itemUsageTodayMillis)
         return super.onUnbind(intent)
     }
 } 
