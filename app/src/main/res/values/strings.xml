@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">timesave</string>
+    <string name="accessibility_service_description">This service helps restrict time on distracting websites by monitoring browser usage.</string>
+</resources>
