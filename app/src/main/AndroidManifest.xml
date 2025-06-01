@@ -39,7 +39,8 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="false" 
-            android:label="Settings">
+            android:label="Settings"
+            android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
             <!-- android:parentActivityName=".MainActivity" >
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
@@ -49,7 +50,8 @@
         <activity
             android:name=".AppPickerActivity"
             android:exported="false"
-            android:label="Select App">
+            android:label="Select App"
+            android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
             <!-- android:parentActivityName=".SettingsActivity" >
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"

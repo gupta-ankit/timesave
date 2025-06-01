@@ -32,7 +32,21 @@ class BlockedItemAdapter(
             BlockType.APP -> "App: ${item.identifier}"
             BlockType.WEBSITE -> "Site: ${item.identifier}"
         }
-        holder.timeLimit.text = String.format(Locale.getDefault(), "%d min", item.timeLimitInMinutes)
+        
+        if (item.timeLimitInMinutes == 0L) {
+            holder.timeLimit.text = "Blocked"
+        } else {
+            val hours = item.timeLimitInMinutes / 60
+            val minutes = item.timeLimitInMinutes % 60
+            var timeString = ""
+            if (hours > 0) {
+                timeString += "${hours}h "
+            }
+            if (minutes > 0 || hours.toInt() == 0) { // Show minutes if they exist, or if hours is 0 (e.g. "0h 30min" or just "30min")
+                timeString += "${minutes}m"
+            }
+            holder.timeLimit.text = timeString.trim()
+        }
 
         // Load app icon if it's an app
         if (item.type == BlockType.APP) {
@@ -62,14 +76,6 @@ class BlockedItemAdapter(
         notifyDataSetChanged() // Consider using DiffUtil for better performance later
     }
     
-    fun removeItem(position: Int) {
-        if (position >= 0 && position < items.size) {
-            items.removeAt(position)
-            notifyItemRemoved(position)
-            // notifyItemRangeChanged(position, items.size) // If positions shift
-        }
-    }
-
     fun updateItem(position: Int, item: BlockedItem) {
         if (position >= 0 && position < items.size) {
             items[position] = item

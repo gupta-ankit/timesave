@@ -3,19 +3,17 @@ package com.example.timesave
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
-import android.view.LayoutInflater
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import android.widget.EditText
-import android.widget.LinearLayout
 import android.widget.NumberPicker
 import androidx.activity.result.contract.ActivityResultContracts
+import android.view.LayoutInflater
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -100,25 +98,30 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun showAddItemDialog(type: BlockType, prefillIdentifier: String? = null, prefillName: String? = null) {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_add_edit_item, null)
-        val textInputLayoutIdentifier = dialogView.findViewById<TextInputLayout>(R.id.textInputLayoutIdentifier)
         val editTextIdentifier = dialogView.findViewById<EditText>(R.id.editTextIdentifier)
-        val textInputLayoutName = dialogView.findViewById<TextInputLayout>(R.id.textInputLayoutName)
         val editTextName = dialogView.findViewById<EditText>(R.id.editTextName)
-        val numberPickerTimeLimit = dialogView.findViewById<NumberPicker>(R.id.numberPickerTimeLimit)
+        val numberPickerHours = dialogView.findViewById<NumberPicker>(R.id.numberPickerHours)
+        val numberPickerMinutes = dialogView.findViewById<NumberPicker>(R.id.numberPickerMinutes)
+        val textInputLayoutIdentifier = dialogView.findViewById<TextInputLayout>(R.id.textInputLayoutIdentifier)
+        val textInputLayoutName = dialogView.findViewById<TextInputLayout>(R.id.textInputLayoutName)
 
-        numberPickerTimeLimit.minValue = 1
-        numberPickerTimeLimit.maxValue = 300 // Max 5 hours
-        numberPickerTimeLimit.value = 60 // Default 60 minutes
+        numberPickerHours.minValue = 0
+        numberPickerHours.maxValue = 23 // Max 23 hours
+        numberPickerHours.value = 1 // Default 1 hour
+
+        numberPickerMinutes.minValue = 0 // Allow 0 minutes
+        numberPickerMinutes.maxValue = 59 // Max 59 minutes
+        numberPickerMinutes.value = 0 // Default 0 minutes
 
         val title: String
         when (type) {
             BlockType.APP -> {
                 title = "Block New App"
-                textInputLayoutIdentifier.hint = "Package Name (e.g., com.example.app)"
                 editTextIdentifier.setText(prefillIdentifier ?: "")
                 editTextIdentifier.isEnabled = prefillIdentifier == null // Lock if prefilled from picker
-                textInputLayoutName.hint = "App Name (Optional)"
                 editTextName.setText(prefillName ?: "")
+                textInputLayoutIdentifier.hint = "Package Name"
+                textInputLayoutName.hint = "App Name (Optional)"
             }
             BlockType.WEBSITE -> {
                 title = "Block New Website"
@@ -133,7 +136,9 @@ class SettingsActivity : AppCompatActivity() {
             .setPositiveButton("Save") { dialog, _ ->
                 val identifier = editTextIdentifier.text.toString().trim()
                 var displayName = editTextName.text.toString().trim()
-                val timeLimit = numberPickerTimeLimit.value.toLong()
+                val hours = numberPickerHours.value
+                val minutes = numberPickerMinutes.value
+                val totalTimeLimitInMinutes = (hours * 60 + minutes).toLong()
 
                 if (identifier.isEmpty()) {
                     Toast.makeText(this, "Identifier cannot be empty", Toast.LENGTH_SHORT).show()
@@ -141,7 +146,7 @@ class SettingsActivity : AppCompatActivity() {
                 }
                 if (displayName.isEmpty()) displayName = identifier // Default display name to identifier
 
-                val newItem = BlockedItem(identifier, type, timeLimit, displayName)
+                val newItem = BlockedItem(identifier, type, totalTimeLimitInMinutes, displayName)
                 blockedItemsList.add(newItem)
                 adapter.notifyItemInserted(blockedItemsList.size - 1)
                 saveBlockedItems()
@@ -153,32 +158,42 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun showEditItemDialog(item: BlockedItem, position: Int) {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_add_edit_item, null)
-        val textInputLayoutIdentifier = dialogView.findViewById<TextInputLayout>(R.id.textInputLayoutIdentifier)
         val editTextIdentifier = dialogView.findViewById<EditText>(R.id.editTextIdentifier)
-        val textInputLayoutName = dialogView.findViewById<TextInputLayout>(R.id.textInputLayoutName)
         val editTextName = dialogView.findViewById<EditText>(R.id.editTextName)
-        val numberPickerTimeLimit = dialogView.findViewById<NumberPicker>(R.id.numberPickerTimeLimit)
+        val numberPickerHours = dialogView.findViewById<NumberPicker>(R.id.numberPickerHours)
+        val numberPickerMinutes = dialogView.findViewById<NumberPicker>(R.id.numberPickerMinutes)
+        val textInputLayoutIdentifier = dialogView.findViewById<TextInputLayout>(R.id.textInputLayoutIdentifier)
 
         editTextIdentifier.setText(item.identifier)
         editTextIdentifier.isEnabled = false // Cannot edit identifier
         editTextName.setText(item.displayName ?: "")
         
         textInputLayoutIdentifier.hint = if(item.type == BlockType.APP) "Package Name" else "Hostname"
-        textInputLayoutName.hint = "Display Name (Optional)"
 
-        numberPickerTimeLimit.minValue = 1
-        numberPickerTimeLimit.maxValue = 300 // Max 5 hours, adjust as needed
-        numberPickerTimeLimit.value = item.timeLimitInMinutes.toInt().coerceIn(1, 300)
+        val currentTotalMinutes = item.timeLimitInMinutes
+        val currentHours = (currentTotalMinutes / 60).toInt()
+        val currentMinutes = (currentTotalMinutes % 60).toInt()
+
+        numberPickerHours.minValue = 0
+        numberPickerHours.maxValue = 23
+        numberPickerHours.value = currentHours.coerceIn(0, 23)
+
+        numberPickerMinutes.minValue = 0
+        numberPickerMinutes.maxValue = 59
+        numberPickerMinutes.value = currentMinutes.coerceIn(0, 59)
 
         AlertDialog.Builder(this)
             .setTitle("Edit Time Limit for ${item.displayName ?: item.identifier}")
             .setView(dialogView)
             .setPositiveButton("Save") { dialog, _ ->
                 var newDisplayName = editTextName.text.toString().trim()
-                val newTimeLimit = numberPickerTimeLimit.value.toLong()
+                val hours = numberPickerHours.value
+                val minutes = numberPickerMinutes.value
+                val newTotalTimeLimit = (hours * 60 + minutes).toLong()
+
                 if (newDisplayName.isEmpty()) newDisplayName = item.identifier
 
-                val updatedItem = item.copy(timeLimitInMinutes = newTimeLimit, displayName = newDisplayName)
+                val updatedItem = item.copy(timeLimitInMinutes = newTotalTimeLimit, displayName = newDisplayName)
                 blockedItemsList[position] = updatedItem
                 adapter.updateItem(position, updatedItem)
                 saveBlockedItems()
@@ -193,9 +208,27 @@ class SettingsActivity : AppCompatActivity() {
             .setTitle("Delete Item")
             .setMessage("Are you sure you want to delete '${item.displayName ?: item.identifier}' from the blocklist?")
             .setPositiveButton("Delete") { dialog, _ ->
-                blockedItemsList.removeAt(position)
-                adapter.removeItem(position)
-                saveBlockedItems()
+                // Ensure position is valid before removing
+                if (position >= 0 && position < blockedItemsList.size) {
+                    Log.d(TAG, "Deleting item at position: $position, item: ${blockedItemsList[position].identifier}")
+                    blockedItemsList.removeAt(position) // Modify the list
+                    
+                    // Notify the adapter about the removal
+                    adapter.notifyItemRemoved(position)
+                    
+                    // Notify that items after the removed one have shifted
+                    // The range starts at 'position' and covers the rest of the items in the (newly sized) list
+                    if (position < blockedItemsList.size) { // Check if there are items after the removed one
+                        adapter.notifyItemRangeChanged(position, blockedItemsList.size - position)
+                    }
+                    
+                    saveBlockedItems() // Save the updated list
+                    Log.d(TAG, "Item deleted. New list size: ${blockedItemsList.size}")
+                } else {
+                    Log.w(TAG, "Attempted to delete item at invalid position: $position. List size: ${blockedItemsList.size}")
+                    Toast.makeText(this, "Error deleting item. Please try again.", Toast.LENGTH_SHORT).show()
+                    loadBlockedItems() // Resync adapter with blockedItemsList as a fallback
+                }
                 dialog.dismiss()
             }
             .setNegativeButton("Cancel", null)

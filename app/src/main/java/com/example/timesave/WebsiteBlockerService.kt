@@ -76,6 +76,19 @@ class WebsiteBlockerService : AccessibilityService() {
         currentlyTrackedIdentifier = identifier
         currentItemType = type
         sessionStartTimeMillis = SystemClock.elapsedRealtime()
+
+        // Check for immediate block if time limit is 0
+        val itemConfig = blockedItems.find { it.identifier == identifier }
+        if (itemConfig != null && itemConfig.timeLimitInMinutes == 0L) {
+            Log.w(TAG, "Immediate block triggered for ${itemConfig.displayName ?: identifier} (0 min limit).")
+            // We don't need to finalize a session with duration, just show block screen.
+            // The periodic checker will also catch this, but this is faster.
+            showBlockScreen(itemConfig) 
+            // We might want to clear the current session here as well, 
+            // as showBlockScreen might not inherently stop further tracking if the user somehow gets back.
+            // However, GLOBAL_ACTION_HOME should prevent that.
+            // clearCurrentSession() // Consider if this is needed if GLOBAL_ACTION_HOME fails
+        }
     }
 
     private fun finalizeSession(identifier: String?, preemptiveBlock: Boolean = false) {
@@ -117,7 +130,18 @@ class WebsiteBlockerService : AccessibilityService() {
         val itemConfig = blockedItems.find { it.identifier == identifier }
         if (itemConfig != null) {
             val limitMillis = itemConfig.timeLimitInMinutes * 60 * 1000
-            if (limitMillis >= 0 && totalUsageMillis >= limitMillis) {
+
+            // If limit is 0, it means block immediately. This should be caught by startNewSession or periodic check.
+            // This function is typically called after a session, so if limit is 0, it implies it should have been blocked already.
+            if (itemConfig.timeLimitInMinutes == 0L) {
+                 if (!isPeriodicCheck) { // Avoid double logging if periodic check also caught it
+                    Log.w(TAG, "Normal Check: Item '${itemConfig.displayName ?: identifier}' has 0 min limit and was accessed. Should be blocked.")
+                 }
+                 showBlockScreen(itemConfig) // Ensure block screen is shown
+                 return
+            }
+
+            if (limitMillis > 0 && totalUsageMillis >= limitMillis) {
                 if (!isPeriodicCheck) {
                     Log.w(TAG, "Normal Check: Time limit EXCEEDED for ${itemConfig.displayName ?: identifier}!")
                 }
@@ -213,16 +237,26 @@ class WebsiteBlockerService : AccessibilityService() {
 
         if (trackedId != null && sessionStart != null) {
             val itemConfig = blockedItems.find { it.identifier == trackedId }
-            if (itemConfig != null && itemConfig.timeLimitInMinutes > 0) {
-                val currentTimeMillis = SystemClock.elapsedRealtime()
-                val currentSessionDurationMillis = currentTimeMillis - sessionStart
-                val recordedUsageMillis = itemUsageTodayMillis.getOrDefault(trackedId, 0L)
-                val hypotheticalTotalUsageMillis = recordedUsageMillis + currentSessionDurationMillis
+            if (itemConfig != null) { // Check if itemConfig is found
                 val limitMillis = itemConfig.timeLimitInMinutes * 60 * 1000
+                
+                if (limitMillis == 0L) { // Handle 0 minute limit separately for periodic check
+                    Log.w(TAG, "Periodic Check: Immediate block condition for ${itemConfig.displayName ?: trackedId} (0 min limit).")
+                    finalizeSession(trackedId, true) // true for preemptive block
+                    return // No further duration check needed
+                }
 
-                if (hypotheticalTotalUsageMillis >= limitMillis) {
-                    Log.w(TAG, "Periodic Check: Time limit EXCEEDED for ${itemConfig.displayName ?: trackedId}!")
-                    finalizeSession(trackedId, true) 
+                // Only proceed with duration checks if limit > 0
+                if (itemConfig.timeLimitInMinutes > 0) { 
+                    val currentTimeMillis = SystemClock.elapsedRealtime()
+                    val currentSessionDurationMillis = currentTimeMillis - sessionStart
+                    val recordedUsageMillis = itemUsageTodayMillis.getOrDefault(trackedId, 0L)
+                    val hypotheticalTotalUsageMillis = recordedUsageMillis + currentSessionDurationMillis
+
+                    if (hypotheticalTotalUsageMillis >= limitMillis) {
+                        Log.w(TAG, "Periodic Check: Time limit EXCEEDED for ${itemConfig.displayName ?: trackedId}!")
+                        finalizeSession(trackedId, true)
+                    }
                 }
             }
         }
